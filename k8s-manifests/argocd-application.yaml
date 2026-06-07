@@ -1,0 +1,19 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: fss-retail-app
+  namespace: argocd
+# ArgoCD Application connects GitHub repo to EKS and auto-syncs k8s-manifests
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/Msocial123/fss-Retail-App_kubernetes.git
+    targetRevision: master
+    path: k8s-manifests
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: murali-ns
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true

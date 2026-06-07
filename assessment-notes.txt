@@ -1,0 +1,276 @@
+==============================================================
+  FSS RETAIL APP KUBERNETES - ASSESSMENT NOTES (All 6 Tasks)
+==============================================================
+Repo: https://github.com/Msocial123/fss-Retail-App_kubernetes.git
+Stack: Node.js + MongoDB + Docker + Kubernetes (EKS) + ArgoCD + Datadog + Claude AI
+App: FSS Retail web app (register, login, OTP, cart, purchase) on port 3130
+Namespace used: murali-ns
+
+==============================================================
+TASK 1: CI - GitHub Actions (.github/workflows/docker-image.yml)
+==============================================================
+-- What the file already does (DO NOT CHANGE) --
+  Trigger  : push to master branch
+  Step 1   : Checkout code (actions/checkout@v3)
+  Step 2   : Login to Docker Hub → secrets: DOCKERHUB_USERNAME, DOCKERHUB_PASSWORD
+  Step 3   : Setup Docker Buildx
+  Step 4   : Build & push image → muralisocial123/ust-retail-app:v1.1.0
+             from ./Dockerfile (node:18, WORKDIR /Capsule, EXPOSE 3130)
+
+-- Docx Requirements covered --
+  [✓] Source Code Integration    : on push to master → triggers pipeline
+  [✓] Application Build Process  : checkout → Docker build (npm install inside Dockerfile)
+  [✓] Docker Image Lifecycle     : build → tag v1.1.0 → push to DockerHub
+  [✓] Registry authentication    : docker/login-action@v2 with secrets
+  [✓] CI Security                : DOCKERHUB_USERNAME & DOCKERHUB_PASSWORD as GitHub Secrets
+
+-- Docx also expects (note for explanation) --
+  [→] Pull request + branch triggers:
+        on:
+          push:
+            branches: [master, 'feature/**']
+          pull_request:
+            branches: [master]
+  [→] npm install + npm test step for quality validation
+  [→] Image scanning (trivy) for container security
+
+-- Dockerfile (existing, do not change) --
+  FROM node:18
+  WORKDIR /Capsule
+  COPY package*.json ./
+  RUN npm install
+  COPY . .
+  EXPOSE 3130
+  CMD ["npm", "start"]
+
+-- docker-compose.yaml (existing, do not change) --
+  fss-retail: builds from Dockerfile, port 3130, env vars from .env
+  mongodb: mongo:latest, port 27017, volume ./data:/data/db
+
+==============================================================
+TASK 2: Deploy Retail Application on Amazon EKS
+==============================================================
+-- Docx Requirements --
+  [✓] EKS Cluster setup
+  [✓] Worker node configuration
+  [✓] Namespace strategy → murali-ns
+  [✓] Application deployment structure
+  [✓] Service exposure → LoadBalancer
+  [✓] High availability, scalability, security
+
+-- Existing K8s manifest files (DO NOT CHANGE) --
+  k8s-manifests/retail-app-deployment.yaml   → Deployment: 4 replicas, image: saiteja2502/userprofileretail:latest
+                                               env from ConfigMap (retail-app-config) + Secret (retail-app-secret)
+  k8s-manifests/retail-app-svc.yaml          → LoadBalancer Service, port 3130
+  k8s-manifests/retail-mongodb-deployment.yaml → MongoDB Deployment: 1 replica, env from ConfigMap
+  k8s-manifests/retail-mongodb-svc.yaml      → ClusterIP Service, port 27017
+  test-volumes.yaml                          → StorageClass + PV (10Gi EBS vol-070c0f15d40fd594d) + PVC
+
+-- EKS Cluster commands → see eks-setup.sh --
+  eksctl create cluster → shine-fss-cluster, t3.medium, 2-3 nodes
+  kubectl create namespace murali-ns
+  kubectl apply -f k8s-manifests/
+
+-- Access & verify --
+  kubectl get pods -n murali-ns
+  kubectl get svc -n murali-ns
+  kubectl get pv && kubectl get pvc -n murali-ns
+
+-- Notes file (existing) mentions --
+  Enable OIDC for EBS CSI Driver:
+    eksctl utils associate-iam-oidc-provider --region us-west-2 --cluster murali-test-cluster --approve
+  Create IAM role for EBS CSI:
+    eksctl create iamserviceaccount --name ebs-csi-controller-sa ...
+
+==============================================================
+TASK 3: GitOps Deployment using ArgoCD
+==============================================================
+-- Docx Requirements --
+  [✓] ArgoCD installation
+  [✓] Kubernetes Manifest Management (Deployments, Services, ConfigMap, Secret)
+  [✓] Application Synchronization (monitor Git changes, detect drift, sync state)
+  [✓] Deployment Operations (health, sync status, rollback)
+
+-- What's already in the project (k8s-manifests/) --
+  retail-app-deployment.yaml    → App deployment (4 replicas, port 3130)
+  retail-app-svc.yaml           → LoadBalancer service (port 3130)
+  retail-mongodb-deployment.yaml→ MongoDB deployment (1 replica, port 27017)
+  retail-mongodb-svc.yaml       → ClusterIP service (port 27017)
+  test-volumes.yaml             → EBS PersistentVolume + PVC for MongoDB data
+
+-- ArgoCD Install Steps --
+  kubectl create namespace argocd
+  kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+  kubectl create namespace murali-ns
+  kubectl patch svc argocd-server -n argocd -p '{"spec": {"type": "LoadBalancer"}}'
+  kubectl port-forward svc/argocd-server -n argocd 8080:443
+  argocd admin initial-password -n argocd
+  argocd login <ARGOCD-LB-URL>:80
+  argocd account update-password
+
+-- ArgoCD Application points to --
+  repoURL: https://github.com/Msocial123/fss-Retail-App_kubernetes.git
+  path: k8s-manifests
+  namespace: murali-ns
+  syncPolicy: automated (prune: true, selfHeal: true)
+  See: argocd-application.yaml (new file created)
+
+-- Deployment Validation --
+  kubectl get applications -n argocd
+  kubectl get pods -n murali-ns
+  kubectl get svc -n murali-ns
+  argocd app get fss-retail-app
+
+-- Rollback --
+  kubectl rollout undo deployment/retail-app-deployment -n murali-ns
+
+==============================================================
+TASK 4: Datadog Monitoring for FSS Retail App
+==============================================================
+-- Docx Requirements --
+  [✓] Cluster health, node utilization, pod status, container metrics, K8s events
+  [✓] App availability, response latency, transaction failures, errors, resource consumption
+  [✓] Application + Container + Kubernetes + Error logs
+  [✓] Dashboards: Retail Operations + Infrastructure
+  [✓] Alerts: downtime, pod restart, CPU, memory, errors, performance degradation
+
+-- Install Datadog Agent → see datadog-setup.sh --
+  helm repo add datadog https://helm.datadoghq.com
+  helm install datadog-agent datadog/datadog \
+    --set datadog.apiKey=$DATADOG_API_KEY \
+    --set datadog.logs.enabled=true \
+    --set datadog.logs.containerCollectAll=true \
+    --set datadog.apm.enabled=true \
+    --set datadog.processAgent.enabled=true
+
+-- Retail Operations Dashboard widgets --
+  1. App availability   : service check on retail-app-service endpoint
+  2. Transaction perf   : HTTP request rate + p95 response time
+  3. Error trends       : 5xx error rate over time
+
+-- Infrastructure Dashboard widgets --
+  1. EKS cluster health : node status, ready vs not-ready
+  2. CPU utilization    : per pod and per node
+  3. Memory utilization : per pod, alert if > 85%
+  4. Pod availability   : pod count vs desired replicas
+
+-- Alerts to configure --
+  - retail-app-service down        → CRITICAL (synthetics check)
+  - pod restarts > 3 in 10min      → CRITICAL (kubernetes.containers.restarts)
+  - CPU > 80%                      → WARNING  (system.cpu.user)
+  - Memory < 15% free              → WARNING  (system.mem.pct_usable)
+  - HTTP error rate > 2%           → CRITICAL (trace.servlet.request.errors)
+  - Response time > 2s             → WARNING  (trace.servlet.request.duration)
+
+==============================================================
+TASK 5: AI-Powered EKS Troubleshooting Agent (Claude AI)
+==============================================================
+-- Docx Requirements --
+  [✓] Data Sources: pod logs, K8s events, Datadog metrics/logs, deployment info
+  [✓] Claude AI integration for log analysis, error ID, RCA, recommendations, incident summary
+  [✓] Scenario 1: App unavailable after deployment
+  [✓] Scenario 2: Slow checkout response
+  [✓] Scenario 3: Pods continuously restarting
+  [✓] Scenario 4: Production errors increase after new release
+
+-- See ai-agent.py for full code --
+
+-- Scenario 1: Retail App unavailable after deployment --
+  kubectl get pods -n murali-ns                                  ← deployment status
+  kubectl describe deployment retail-app-deployment -n murali-ns ← pod health
+  kubectl logs <pod-name> -n murali-ns                           ← application logs
+  kubectl get events -n murali-ns --sort-by=.lastTimestamp       ← K8s events
+  Claude → ImagePullBackOff / wrong port / ConfigMap missing / Secret not found
+
+-- Scenario 2: Slow checkout response --
+  kubectl top pods -n murali-ns                                  ← resource utilization
+  kubectl top nodes                                              ← error patterns
+  kubectl logs <pod-name> -n murali-ns | grep -i "slow\|error"  ← performance bottlenecks
+  Claude → DB connection timeout / CPU throttling / missing index in MongoDB
+
+-- Scenario 3: Pods continuously restarting (CrashLoopBackOff) --
+  kubectl get pods -n murali-ns
+  kubectl describe pod <pod-name> -n murali-ns                   ← CrashLoopBackOff events
+  kubectl logs <pod-name> -n murali-ns --previous                ← container logs
+  Claude → OOMKilled / wrong env var / MongoDB not ready / bad image tag
+
+-- Scenario 4: Production errors increase after new release --
+  kubectl rollout history deployment/retail-app-deployment -n murali-ns  ← deployment timeline
+  kubectl logs <pod-name> -n murali-ns | grep -i error                   ← error logs
+  kubectl get events -n murali-ns                                         ← recent changes
+  Claude → code regression / new config error / dependency mismatch
+  Fix → kubectl rollout undo deployment/retail-app-deployment -n murali-ns
+
+==============================================================
+TASK 6: Open Source AIOps Platform
+==============================================================
+-- Docx Requirements --
+  [✓] Log intelligence, anomaly detection, event correlation, RCA, incident recommendation
+  [✓] Compare Traditional vs AI-Powered Operations
+
+-- See aiops-comparison.py for full comparison output --
+
+-- Tools --
+  Prometheus  : metrics scraping from K8s pods and nodes
+  Grafana     : visual dashboards for metrics
+  Loki        : log aggregation, integrates with Grafana
+  Robusta     : K8s-native alert routing + AI root cause analysis
+  OpenObserve : open source full-stack observability (logs+metrics+traces)
+
+-- Comparison --
+  Traditional Operations:
+    - Manual log review (kubectl logs, grep)
+    - Manual troubleshooting step by step
+    - Reactive: find problem after users complain
+    - High MTTR (hours)
+
+  AI-Powered Operations:
+    - Automated log analysis via Claude
+    - Instant root cause suggestions
+    - Proactive: anomaly detected before impact
+    - Low MTTR (minutes)
+
+==============================================================
+FINAL ARCHITECTURE FLOW (as required in docx)
+==============================================================
+
+  Developer
+      ↓ pushes code
+  GitHub Repository (fss-Retail-App_kubernetes)
+      ↓ push to master triggers
+  GitHub Actions CI Pipeline
+      ↓ docker build + push
+  Docker Image Registry (muralisocial123/ust-retail-app:v1.1.0)
+      ↓ image ready → k8s-manifests updated in repo
+  GitOps Repository (same repo, k8s-manifests/ path)
+      ↓ ArgoCD watches repo
+  ArgoCD (namespace: argocd)
+      ↓ auto-sync to EKS
+  Amazon EKS Cluster (namespace: murali-ns)
+      ↓ pods running
+  Retail Application (retail-app-deployment: 4 replicas + mongodb: 1 replica)
+      ↓ logs and metrics collected
+  Datadog Observability Platform (DaemonSet agent on all nodes)
+      ↓ alert fires
+  AI Troubleshooting Agent (ai-agent.py)
+      ↓ collects kubectl logs + events
+  Claude / Open Source AIOps Engine
+      → analyzes root cause → recommends fix → SRE resolves incident
+
+==============================================================
+KEY FILES IN THIS PROJECT (existing - DO NOT MODIFY)
+==============================================================
+FILE                                        WHAT IT DOES
+.github/workflows/docker-image.yml         → CI: checkout + DockerHub login + build + push v1.1.0
+Dockerfile                                 → node:18, WORKDIR /Capsule, npm install, port 3130
+docker-compose.yaml                        → local dev: fss-retail + mongodb
+server.js                                  → Express: register, login, OTP, cart, purchase, contact
+package.json                               → deps: express, mongoose, bcryptjs, nodemailer
+.env                                       → MONGODB_URI, SESSION_SECRET, PORT, EMAIL creds
+k8s-manifests/retail-app-deployment.yaml  → K8s Deployment: 4 replicas, port 3130, ConfigMap+Secret env
+k8s-manifests/retail-app-svc.yaml         → LoadBalancer Service port 3130
+k8s-manifests/retail-mongodb-deployment.yaml → MongoDB Deployment: 1 replica
+k8s-manifests/retail-mongodb-svc.yaml     → MongoDB ClusterIP Service port 27017
+test-volumes.yaml                         → EBS StorageClass + PV (10Gi) + PVC for MongoDB
+Notes                                     → OIDC + IAM role commands for EBS CSI driver
+==============================================================

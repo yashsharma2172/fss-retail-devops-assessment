@@ -1,0 +1,112 @@
+==============================================================
+  FSS RETAIL APP KUBERNETES - FULL DEPLOYMENT STEPS (PowerShell)
+==============================================================
+NOTE: All commands are single-line (PowerShell on Windows)
+Region: ap-south-2  |  Namespace: murali-ns  |  Manifests: k8s-manifests/
+
+==============================================================
+PHASE 1 — Prerequisites Check
+==============================================================
+aws --version
+kubectl version --client
+eksctl version
+helm version
+
+==============================================================
+PHASE 2 — Create EKS Cluster
+==============================================================
+eksctl create cluster --name fss-cluster --region ap-south-2 --nodegroup-name fss-nodes --node-type t3.small --nodes 2 --nodes-min 1 --nodes-max 3 --managed
+
+-- Wait 15-20 mins until you see: "EKS cluster is ready" --
+
+-- If it fails / gets stuck, delete and retry --
+eksctl delete cluster --name fss-cluster --region ap-south-2
+
+==============================================================
+PHASE 3 — Connect kubectl to Cluster
+==============================================================
+aws eks update-kubeconfig --name fss-cluster --region ap-south-2
+kubectl get nodes
+
+-- Expected: 2 nodes with STATUS = Ready --
+
+==============================================================
+PHASE 4 — Create Namespaces
+==============================================================
+kubectl create namespace murali-ns
+kubectl create namespace argocd
+kubectl get ns
+
+==============================================================
+PHASE 5 — Deploy K8s Manifests (run from project root folder)
+==============================================================
+cd "c:\Users\jeeva\Desktop\file\asses\fss-Retail-App_kubernetes"
+kubectl apply -f k8s-manifests/
+
+-- This applies in order: --
+--   retail-app-configmap.yaml     → ConfigMap --
+--   retail-app-secret.yaml        → Secret --
+--   retail-mongodb-deployment.yaml→ MongoDB Deployment --
+--   retail-mongodb-svc.yaml       → MongoDB Service --
+--   retail-app-deployment.yaml    → App Deployment (4 replicas) --
+--   retail-app-svc.yaml           → LoadBalancer Service --
+
+kubectl get pods -n murali-ns
+kubectl get svc -n murali-ns
+
+==============================================================
+PHASE 6 — Install ArgoCD
+==============================================================
+kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+kubectl wait --for=condition=available deployment/argocd-server -n argocd --timeout=180s
+kubectl get pods -n argocd
+
+-- Wait until all pods show STATUS = Running --
+
+==============================================================
+PHASE 7 — Expose ArgoCD UI
+==============================================================
+kubectl patch svc argocd-server -n argocd -p "{""spec"": {""type"": ""LoadBalancer""}}"
+kubectl get svc -n argocd
+
+-- Copy the EXTERNAL-IP from argocd-server row --
+
+==============================================================
+PHASE 8 — Login to ArgoCD
+==============================================================
+argocd admin initial-password -n argocd
+
+argocd login <PASTE-EXTERNAL-IP-HERE>:80
+-- Username: admin --
+-- Password: (from above command) --
+
+argocd account update-password
+
+==============================================================
+PHASE 9 — Apply ArgoCD Application (GitOps sync)
+==============================================================
+kubectl apply -f k8s-manifests/argocd-application.yaml
+
+==============================================================
+PHASE 10 — Verify Everything
+==============================================================
+kubectl get pods -n murali-ns
+kubectl get svc -n murali-ns
+argocd app get fss-retail-app
+kubectl get events -n murali-ns --sort-by=.lastTimestamp
+
+-- Expected: --
+--   pods   → STATUS = Running (5 pods: 4 app + 1 mongodb) --
+--   svc    → retail-app-service has EXTERNAL-IP --
+--   argocd → Sync Status = Synced, Health = Healthy --
+
+==============================================================
+ROLLBACK (if deployment fails)
+==============================================================
+kubectl rollout undo deployment/retail-app-deployment -n murali-ns
+
+==============================================================
+DELETE CLUSTER (when done / if resetting)
+==============================================================
+eksctl delete cluster --name fss-cluster --region ap-south-2
+==============================================================
