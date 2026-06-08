@@ -7,7 +7,7 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: https://github.com/jeevan0024/fss-Retail-App_kubernetes.git
+    repoURL: https://github.com/yashsharma2172/fss-retail-devops-assessment.git
     targetRevision: main
     path: k8s-manifests
   destination:
