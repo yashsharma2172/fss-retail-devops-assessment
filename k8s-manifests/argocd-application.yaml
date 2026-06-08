@@ -8,11 +8,11 @@ spec:
   project: default
   source:
     repoURL: https://github.com/Msocial123/fss-Retail-App_kubernetes.git
-    targetRevision: master
+    targetRevision: main
     path: k8s-manifests
   destination:
     server: https://kubernetes.default.svc
-    namespace: murali-ns
+    namespace: fss-clu
   syncPolicy:
     automated:
       prune: true
